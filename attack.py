@@ -10,8 +10,6 @@
 ##### IMPORTS #########
 #######################
 
-#!/usr/bin/python3
-
 import getpass, gzip, os, paramiko, re, requests, shutil, subprocess, sys, tarfile, time, wget
 from ipaddress import ip_network
 from scapy.all import IP, ICMP, TCP, sr1, send, RandShort

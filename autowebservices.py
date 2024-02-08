@@ -159,24 +159,44 @@ def generate_key_pair(ec2_resource):
         print(f"Failed to create key pair: {e}")
         return None
 
-def select_resource(resources, resource_type):
-    """Generic function for selecting a resource from a list."""
+def list_resources(resources, resource_type):
     for i, resource in enumerate(resources, start=1):
-        name = get_name_tag(resource.get('Tags', []))
-        print(f"{i}. {name} | ID: {resource['ResourceId']}")
+        name = get_name_tag(resource.get('Tags', [])) if 'Tags' in resource else "N/A"
+        resource_id = resource['VpcId'] if resource_type == 'VPC' else (
+            resource['SubnetId'] if resource_type == 'Subnet' else resource['GroupId'])
+        print(f"{i}. {resource_type} ID: {resource_id} | Name: {name}")
 
-    choice = input(f"Select a {resource_type} by number (or press Enter to skip): ")
-    if choice:
-        try:
-            choice_index = int(choice) - 1
-            if 0 <= choice_index < len(resources):
-                return resources[choice_index]['ResourceId']
-            else:
-                print("Invalid selection.")
-        except ValueError:
-            print("Invalid input.")
+    choice = input(f"Select a {resource_type} by number: ")
+    if choice.isdigit():
+        choice_index = int(choice) - 1
+        if 0 <= choice_index < len(resources):
+            return resources[choice_index][resource_id]  # Return the selected resource ID
+    print("Invalid selection.")
     return None
 
+def select_resource(resources, prompt, resource_type=None):
+    for i, resource in enumerate(resources, start=1):
+        # Dynamically identify the correct ID key based on resource type
+        if resource_type == 'VPC':
+            resource_id_key = 'VpcId'
+        elif resource_type == 'Subnet':
+            resource_id_key = 'SubnetId'
+        elif resource_type == 'Security Group':
+            resource_id_key = 'GroupId'
+        else:
+            raise ValueError("Unsupported resource type")
+
+        resource_id = resource[resource_id_key]
+        name = get_name_tag(resource.get('Tags', [])) if 'Tags' in resource else "N/A"
+        print(f"{i}. {resource_type} ID: {resource_id} | Name: {name}")
+
+    choice = input(prompt)
+    if choice.isdigit():
+        choice_index = int(choice) - 1
+        if 0 <= choice_index < len(resources):
+            return resources[choice_index][resource_id_key]
+    print("Invalid selection.")
+    return None
 
 ############################
 ########## click ###########
@@ -270,22 +290,22 @@ def instance():
     ec2_resource = boto3.resource('ec2', region_name=selected_region)
     ec2_client = boto3.client('ec2', region_name=selected_region)
 
-    name_tag = input("Enter Name tag (press Enter to skip): ")
+    name_tag = input("\nEnter Name tag (press Enter to skip): ")
 
-    os_choice = input("Choose an operating system - Windows 2019 (1) or Ubuntu Server 22.04 (2): ")
+    os_choice = input("\nChoose an operating system - Windows 2019 (1) or Ubuntu Server 22.04 (2): ")
     ami_id = "ami-01baa2562e8727c9d" if os_choice == '1' else "ami-008fe2fc65df48dac"
 
-    instance_type = input("Choose instance type (default t2.micro): ")
+    instance_type = input("\nChoose instance type (default t2.micro): ")
     instance_type = instance_type if instance_type else "t2.micro"
 
-    storage_size = input("Choose storage size (GiB, press Enter for default 8GiB): ")
+    storage_size = input("\nChoose storage size (GiB, press Enter for default 8GiB): ")
     storage_size = int(storage_size) if storage_size else 8
 
-    print("Choose key pair:")
+    print("\nChoose key pair:")
     existing_keys = ec2_client.describe_key_pairs()
     for i, key in enumerate(existing_keys['KeyPairs'], start=1):
         print(f"{i}. {key['KeyName']}")
-    key_choice = input("Enter key number to use or 'n' to create a new one (press Enter to skip): ")
+    key_choice = input("\nEnter key number to use or 'n' to create a new one (press Enter to skip): ")
     if key_choice.lower() == 'n':
         key_pair_name = generate_key_pair(ec2_resource)
     elif key_choice.isdigit():
@@ -293,49 +313,61 @@ def instance():
     else:
         key_pair_name = None  # Handle no key pair scenario
 
-    print_vpcs(ec2_client)
-    vpc_id = input("Choose a VPC ID from the list above (press Enter to use default VPC): ")
+    # Fetch VPCs
+    vpcs = ec2_client.describe_vpcs()['Vpcs']
+    # Use select_resource() for VPC selection
+    vpc_id = select_resource(vpcs, "\nSelect a VPC by number: ", "VPC")
 
-    print_subnets(ec2_client)
-    subnet_id = input("Choose a subnet ID from the list above (press Enter to skip): ")
+    # Fetch Subnets
+    subnets = ec2_client.describe_subnets()['Subnets']
+    # Use select_resource() for Subnet selection
+    subnet_id = select_resource(subnets, "\nSelect a subnet by number: ", "Subnet")
 
-    print_security_groups(ec2_client)
-    sg_id = input("Choose a security group ID from the list above (press Enter to skip): ")
+    # Fetch Security Groups
+    security_groups = ec2_client.describe_security_groups()['SecurityGroups']
+    # Use select_resource() for Security Group selection
+    sg_id = select_resource(security_groups, "\nSelect a security group by number: ", "Security Group")
 
-    ebs_encrypted = input("Choose EBS encryption y/n (default y): ")
-    ebs_encrypted = True if ebs_encrypted.lower() != 'n' else False
+#    ebs_encrypted = input("\nChoose EBS encryption y/n (default y): ")
+#    ebs_encrypted = True if ebs_encrypted.lower() != 'n' else False
 
-    auto_public_ip = input("Choose auto public IP y/n (default y): ")
+    auto_public_ip = input("\nChoose auto public IP y/n (default y): ")
     auto_public_ip = auto_public_ip.lower() != 'n'
 
     # Confirm selections and create instance
-    print("Creating instance with the following configuration:")
+    print("\nCreating instance with the following configuration:")
     print(f"Region: {selected_region}, OS: {'Windows 2019' if os_choice == '1' else 'Ubuntu Server 22.04'}, "
           f"Instance Type: {instance_type}, Storage Size: {storage_size}GiB, Key Pair: {key_pair_name}, "
-          f"VPC ID: {vpc_id}, Subnet ID: {subnet_id}, Security Group ID: {sg_id}, EBS Encrypted: {ebs_encrypted}, "
+          f"VPC ID: {vpc_id}, Subnet ID: {subnet_id}, Security Group ID: {sg_id}" #, EBS Encrypted: {ebs_encrypted}, "
           f"Auto Public IP: {auto_public_ip}")
-
-    confirmation = input("Confirm creation? y/n: ")
+    
+    confirmation = input("\nConfirm creation? y/n: ")
     if confirmation.lower() == 'y':
         try:
+            network_interfaces = [{
+                'SubnetId': subnet_id,
+                'DeviceIndex': 0,
+                'AssociatePublicIpAddress': auto_public_ip,
+                'Groups': [sg_id] if sg_id else None
+            }] if subnet_id else None
+
             instance = ec2_resource.create_instances(
                 ImageId=ami_id,
                 InstanceType=instance_type,
                 KeyName=key_pair_name,
-                SubnetId=subnet_id,
-                SecurityGroupIds=[sg_id] if sg_id else None,
                 MinCount=1,
                 MaxCount=1,
                 TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': name_tag}]}] if name_tag else None,
-                EbsOptimized=ebs_encrypted,
-                AssociatePublicIpAddress=auto_public_ip,
+#                EbsOptimized=ebs_encrypted,
+                NetworkInterfaces=network_interfaces,
             )[0]
-            print(f"Instance created successfully: {instance.id}")
-        except Exception as e:
-            print(f"Failed to create instance: {e}")
-    else:
-        print("Instance creation aborted.")
+            print(f"\nInstance created successfully: {instance.id}")
 
+        except Exception as e:
+            print(f"\nFailed to create instance: {e}")
+
+    else:
+        print("\nInstance creation aborted.\n\n")
 
 if __name__ == '__main__':
     cli()
